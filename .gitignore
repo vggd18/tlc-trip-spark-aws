@@ -1,0 +1,24 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+
+# --- Dados Locais (Não subir GBs de dados pro GitHub!) ---
+nyc_taxi_2019/
+*.parquet
+*.csv
+
+# --- AWS / Glue Temps ---
+.aws/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
