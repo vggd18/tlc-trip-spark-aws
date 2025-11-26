@@ -1,23 +1,29 @@
 provider "aws" {
-  region = "us-east-2" 
+  region = "us-east-2" # Região onde está configurada sua AWS
 }
 
 variable "bucket_name" {
-  default = "taxi-lakehouse-demo-2025"
+  default = "taxi-lakehouse-demo-2025" # Lembre de garantir que este nome é único
 }
 
+# 1. S3 BUCKET
 resource "aws_s3_bucket" "datalake" {
-  bucket = var.bucket_name
-  force_destroy = true 
+  bucket        = var.bucket_name
+  force_destroy = true # Permite destruir o bucket mesmo com dados (útil para demos)
 }
 
+# 2. UPLOAD DO SCRIPT PYTHON (Ajustado para nova estrutura de pastas)
 resource "aws_s3_object" "script_upload" {
   bucket = aws_s3_bucket.datalake.id
-  key    = "scripts/tlc_taxi_script.py"
-  source = "../tlc_taxi_script.py"
-  etag   = filemd5("../tlc_taxi_script.py")
+  key    = "scripts/tlc_taxi_script.py"   # Caminho no S3
+  
+  # Caminho local: Sobe um nível (..) e entra em scripts/
+  source = "../scripts/tlc_taxi_script.py" 
+  
+  etag   = filemd5("../scripts/tlc_taxi_script.py")
 }
 
+# 3. IAM ROLE & POLICIES
 resource "aws_iam_role" "glue_role" {
   name = "glue-taxi-role"
 
@@ -39,29 +45,21 @@ resource "aws_iam_role_policy" "glue_policy" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Permissões S3 e Glue (Consolidadas)
         Action = [
-          "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"
+          "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket",
+          "glue:*" 
         ]
         Effect   = "Allow"
-        Resource = [
-          aws_s3_bucket.datalake.arn,
-          "${aws_s3_bucket.datalake.arn}/*"
-        ]
+        Resource = "*"
       },
       {
+        # Permissões de Log (CloudWatch)
         Action = [
           "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"
         ]
         Effect   = "Allow"
         Resource = "arn:aws:logs:*:*:*:/aws-glue/*"
-      },
-      {
-        Action = [
-          "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket",
-          "glue:*"
-        ]
-        Effect   = "Allow"
-        Resource = "*"
       }
     ]
   })
@@ -72,10 +70,12 @@ resource "aws_iam_role_policy_attachment" "glue_service" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
 }
 
+# 4. GLUE DATABASE
 resource "aws_glue_catalog_database" "taxi_db" {
   name = "taxi_lakehouse_db"
 }
 
+# 5. GLUE JOB (ETL)
 resource "aws_glue_job" "taxi_job" {
   name     = "taxi-pipeline-job"
   role_arn = aws_iam_role.glue_role.arn
@@ -87,26 +87,30 @@ resource "aws_glue_job" "taxi_job" {
   }
 
   default_arguments = {
-    "--datalake-formats"              = "delta" 
-    "--conf"                          = "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
-    "--s3_bucket"                     = aws_s3_bucket.datalake.id 
+    "--datalake-formats"               = "delta"
+    "--conf"                           = "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
+    "--s3_bucket"                      = aws_s3_bucket.datalake.id
     "--enable-continuous-cloudwatch-log" = "true"
-    "--TempDir"                       = "s3://${aws_s3_bucket.datalake.id}/temporary/"
+    "--TempDir"                        = "s3://${aws_s3_bucket.datalake.id}/temporary/"
   }
 
   worker_type       = "G.1X"
   number_of_workers = 2
 }
+
+# 6. GLUE CRAWLER (Para catalogar a tabela Gold)
 resource "aws_glue_crawler" "taxi_crawler" {
   database_name = aws_glue_catalog_database.taxi_db.name
   name          = "taxi-gold-crawler"
   role          = aws_iam_role.glue_role.arn
 
   delta_target {
-    delta_tables = ["s3://${aws_s3_bucket.datalake.id}/lakehouse/gold/financial_performance/"]
-    write_manifest = true 
+    delta_tables   = ["s3://${aws_s3_bucket.datalake.id}/lakehouse/gold/financial_performance/"]
+    write_manifest = true
   }
 }
+
+# 7. ATHENA WORKGROUP
 resource "aws_athena_workgroup" "taxi_wg" {
   name = "taxi-analytics"
 
